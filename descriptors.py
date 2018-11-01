@@ -3,7 +3,9 @@ import logging
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from modules.ball_point_query import BallPointQuery
+#  from modules.ball_point_query import BallPointQuery
+from modules.self_ball_point_query import SelfBallPointQuery
+from modules.octant_sample import OctantSample
 
 logger = logging.getLogger(__name__)
 
@@ -17,19 +19,38 @@ class PointConv(nn.Module):
         self.out_channels = out_channels
         self.radius = radius
         self.max_samples = max_samples
-        self.bpq = BallPointQuery(radius, max_samples)
-        self._true_conv = nn.Conv2d(in_channels, out_channels,
-                                    kernel_size=[1, 9], bias=bias)
-        nn.init.xavier_uniform_(self._true_conv.weight)
-        if bias:
-            self._true_conv.bias.data.zero_()
+        self.bpq = SelfBallPointQuery(radius, max_samples)
+        self.true_conv = nn.Conv2d(in_channels, out_channels,
+                                   kernel_size=[1, 9], bias=bias)
+        self.reset_parameters()
 
-    def _sample_each_octant(self, x, pcs):
+    def sample_each_octant(self, x, pcs):
         """For each input point, sample from each octant a sample point,
-        in total nine points."""
-        raise NotImplementedError
+        in total nine points.
 
-    def _neighbor_index(self, pcs):
+        Parameters
+        ----------
+        x: [batch_size, in_channels, max_samples]
+            The input features for each group.
+        pcs: [batch_size, 3, max_samples]
+            The input point cloud coordinates for each group.
+
+        Returns
+        sampled_pcs: [batch_size, in_channels, 9]
+        ---
+        """
+        # [batch_size, 8, max_samples]
+        octant_idx_all = OctantSample()(pcs)
+        octant_idx = octant_idx_all[..., 0]
+        octant_idx = torch.cat([
+            torch.zeros(octant_idx.size(0), 1, dtype=octant_idx.dtype,
+                        device=octant_idx.device),
+            octant_idx
+        ], dim=1)
+        out = x.gather(2, octant_idx.unsqueeze(1).repeat(1, x.size(1), 1))
+        return out
+
+    def neighbor_index(self, pcs):
         """For input point cloud coordinates, output the grouped index
         belonging to the neighborhood of each point.  Each neighborhood
         contains the center point as the first index.
@@ -42,16 +63,30 @@ class PointConv(nn.Module):
         -------
         group_idx: index of points, [B, N, max_samples]
         """
-        # TODO(leoyolo): ensure that center point is always sampled.
-        return self.bpq(pcs, pcs)
+        return self.bpq(pcs)
 
-    def _group_points(self, x, pcs):
+    def group_points(self, x, pcs):
         """For input point cloud features and coordinates, output the
         grouped point features and coordinates, where the coordinates are
-        normalized with respect to each point."""
+        normalized with respect to each point.
+
+        Parameters
+        ----------
+        x: [B, in_channels, N]
+            Input features for each point.
+        pcs: [B, 3, N]
+            Input point cloud coordinates.
+
+        Returns
+        -------
+        group_x: [B, in_channels, N, max_samples]
+            Grouped features for each point.
+        group_pcs: [B, 3, N, max_samples]
+            Grouped coordinates for each point.
+        """
         # TODO(leoyolo): gather is slow.
         # (B, N, max_samples)
-        group_idx = self._neighbor_index(pcs)
+        group_idx = self.neighbor_index(pcs)
         # (B, 1, N x max_samples)
         group_idx = group_idx.view(group_idx.size(0), -1).unsqueeze(1)
         x_out = x.gather(2, group_idx.repeat(1, x.size(1), 1)).view(
@@ -74,6 +109,25 @@ class PointConv(nn.Module):
         -------
         y: output features, [B, out_channels, N]
         """
+        # [B, 3/in_channels, N, max_samples]
+        group_x, group_pcs = self.group_points(x, pcs)
+        # [B x N, 3/in_channels, max_samples]
+        group_x = group_x.permute(0, 2, 1, 3).contiguous()
+        group_x = group_x.view(-1, group_x.size(2), group_x.size(3))
+        group_pcs = group_pcs.permute(0, 2, 1, 3).contiguous()
+        group_pcs = group_pcs.view(-1, group_pcs.size(2), group_pcs.size(3))
+
+        # [B x N, in_channels, 9]
+        samples = self.sample_each_octant(group_x, group_pcs)
+        samples = samples.view(x.size(0), x.size(2), samples.size(1),
+                               samples.size(2))
         # [B, in_channels, N, 9]
-        samples = self._sample_each_octant(x, pcs)
-        return self._true_conv(samples)
+        samples = samples.permute(0, 2, 1, 3)
+        out = self.true_conv(samples).squeeze(-1)
+        return out
+
+    def reset_parameters(self):
+        """Parameter initialization."""
+        nn.init.xavier_uniform_(self.true_conv.weight)
+        if self.true_conv.bias is not None:
+            self.true_conv.bias.data.zero_()
