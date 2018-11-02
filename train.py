@@ -83,11 +83,11 @@ def train_model():
             ))
             logger.info('Saving model to %s', filename)
             torch.save(point_net.state_dict(), filename)
-        #  if cfg.TEST_INTERVAL > 0 and ((e+1) % cfg.TEST_INTERVAL == 0):
-        #      logger.info('Running test for epoch %d/%d', e+1, cfg.EPOCHS)
-        #      ins_acc, cls_acc = test_model(point_net)
-        #      logger.info('Instance accuracy: %.3f, class accuracy: %.3f',
-        #                  ins_acc, cls_acc)
+        if cfg.TEST_INTERVAL > 0 and ((e+1) % cfg.TEST_INTERVAL == 0):
+            logger.info('Running test for epoch %d/%d', e+1, cfg.EPOCHS)
+            ins_acc, cls_acc = eval_model(point_net)
+            logger.info('Instance accuracy: %.3f, class accuracy: %.3f',
+                        ins_acc, cls_acc)
         # update learning rate
         if (cfg.STEPSIZE > 0) and ((e+1) % cfg.STEPSIZE == 0):
             cfg.LR = max(cfg.LR * cfg.GAMMA, cfg.MIN_LR)
@@ -109,6 +109,34 @@ def train_model():
         ))
         logger.info('Saving final model to %s', filename)
         torch.save(point_net.state_dict(), filename)
+
+
+def eval_model(model):
+    """Run test on model."""
+    model.eval()
+    device = next(model.parameters()).device
+    dataset = ModelNetCls(cfg.DATA_PATH, modelnet40=(cfg.DATASET=='modelnet40'),
+                          train=False, transform=None,
+                          num_points=cfg.NUM_POINTS)
+    loader = torch.utils.data.DataLoader(
+        dataset, cfg.TEST_BATCH_SIZE, shuffle=False, num_workers=cfg.NUM_WORKERS,
+        collate_fn=collate_fn, pin_memory=True, drop_last=False
+    )
+    num_classes = len(np.unique(dataset.labels))
+    num_per_class = [(dataset.labels==i).sum() for i in range(num_classes)]
+    class_hit = [0 for _ in range(num_classes)]
+    for data, labels in loader:
+        data = data.to(device)
+        out = model(data)
+        _, predicted = out.max(dim=-1)
+        predicted = predicted.tolist()
+        labels = labels.tolist()
+        for p, t in zip(predicted, labels):
+            if p == t:
+                class_hit[p] = class_hit[p] + 1
+    instance_accuracy = sum(class_hit) / len(dataset)
+    class_accuracies = [n/total for n, total in zip(class_hit, num_per_class)]
+    return instance_accuracy, np.mean(class_accuracies)
 
 
 def main():
