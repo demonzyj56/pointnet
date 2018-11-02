@@ -39,8 +39,40 @@ __global__ void gather_points_cuda_backward_kernel(const int batch_size, const i
 // reduction kernel
 // requires batch_size * feature_size * num_points blocks
 template <typename scalar_t>
-__global__ void gather_points_reduction_kernel() {
-
+__global__ void gather_points_backward_reduction_kernel(const int batch_size, const int feature_size,
+        const int num_points, const int index_size, const scalar_t* __restrict__ grad_out,
+        const int64_t* __restrict__ indices, scalar_t* __restrict__ grad_feats) {
+    extern __shared__ float sdata[];
+    float *grad_out_this = sdata;  // has size blockDim.x
+    int tid = threadIdx.x;
+    int batch = blockIdx.x;
+    int feat = blockIdx.y;
+    int cur_point = blockIdx.z;
+    int stride = (blockDim.x + index_size - 1) / blockDim.x;
+    scalar_t *grad_feats_this = &grad_feats[(batch*feature_size+feat)*num_points+cur_point];
+    // explicit strided loop
+    for (int i = 0; i < stride; ++i) {
+        int gid = tid + i * blockDim.x;
+        // copy data
+        if ((gid < index_size) && (indices[batch*index_size+gid] == cur_point)) {
+            grad_out_this[tid] = static_cast<float>(grad_out[(batch*feature_size+feat)*index_size+gid]);
+        } else {
+            grad_out_this[tid] = 0.;
+        }
+        __syncthreads();
+        // do reduction!
+        for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+            if (tid < s) {
+                grad_out_this[tid] += grad_out_this[tid+s];
+            }
+            __syncthreads();
+        }
+        // each block takes care of one data point
+        if (tid == 0) {
+            *grad_feats_this += static_cast<scalar_t>(grad_out_this[0]);
+        }
+        __syncthreads();
+    }
 }
 
 
@@ -69,5 +101,20 @@ void gather_points_cuda_backward(at::Tensor grad_out, at::Tensor indices, at::Te
                 gather_points_cuda_backward_kernel<<<blocks, threads>>>(batch_size, feature_size,
                         num_points, index_size, grad_out.data<scalar_t>(), indices.data<int64_t>(),
                         grad_feats.data<scalar_t>());
+    }));
+}
+
+void gather_points_cuda_backward_reduction(at::Tensor grad_out, at::Tensor indices, at::Tensor grad_feats) {
+    const int batch_size = grad_out.size(0);
+    const int feature_size = grad_out.size(1);
+    const int num_points = grad_feats.size(2);
+    const int index_size = indices.size(1);
+    const int threads = 1024;
+    dim3 blocks(batch_size, feature_size, num_points);
+    const int smem_size = sizeof(float) * threads;
+    AT_DISPATCH_FLOATING_TYPES(grad_out.type(), "gather_points_cuda_backward_reduction", ([&] {
+                gather_points_backward_reduction_kernel<<<blocks, threads, smem_size>>>(batch_size,
+                        feature_size, num_points, index_size, grad_out.data<scalar_t>(), 
+                        indices.data<int64_t>(), grad_feats.data<scalar_t>());
     }));
 }
