@@ -6,6 +6,7 @@ template <typename scalar_t>
 __global__ void octant_sample_cuda_forward_kernel(const int batch_size, const int max_samples,
         const scalar_t* __restrict__ pcs, int64_t* __restrict__ octant_idx) {
     int index = blockIdx.x * blockDim.x + threadIdx.x;
+    int octant_cnt[] = {0, 0, 0, 0, 0, 0, 0, 0};
     if (index < batch_size) {
         pcs += index * 3 * max_samples;
         octant_idx += index * 8 * max_samples;
@@ -14,7 +15,8 @@ __global__ void octant_sample_cuda_forward_kernel(const int batch_size, const in
             scalar_t y = pcs[max_samples+i];
             scalar_t z = pcs[2*max_samples+i];
             int octant = 4 * int(x > 0) + 2 * int(y > 0) + int(z > 0);
-            octant_idx[octant*max_samples+i] = i;
+            octant_idx[octant*max_samples+octant_cnt[octant]] = i;
+            octant_cnt[octant] = octant_cnt[octant] + 1;
         }
     }
 }

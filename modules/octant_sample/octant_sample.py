@@ -38,5 +38,4 @@ class OctantSample(nn.Module):
         assert pcs.size(1) == 3
         # [batch_size, 8, max_samples]
         octant_idx = OctantSampleFunction.apply(pcs)
-        octant_idx = torch.sort(octant_idx, dim=-1, descending=True)[0]
         return octant_idx
