@@ -3,9 +3,9 @@ import logging
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-#  from modules.ball_point_query import BallPointQuery
 from modules.self_ball_point_query import SelfBallPointQuery
 from modules.octant_sample import OctantSample
+from modules.gather_points import GatherPoints
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,7 @@ class PointConv(nn.Module):
         self.out_channels = out_channels
         self.radius = radius
         self.max_samples = max_samples
-        self.bpq = SelfBallPointQuery(radius, max_samples)
+        self.sbpq = SelfBallPointQuery(radius, max_samples)
         self.true_conv = nn.Conv2d(in_channels, out_channels,
                                    kernel_size=[1, 9], bias=bias)
         self.reset_parameters()
@@ -47,7 +47,7 @@ class PointConv(nn.Module):
                         device=octant_idx.device),
             octant_idx
         ], dim=1)
-        out = x.gather(2, octant_idx.unsqueeze(1).repeat(1, x.size(1), 1))
+        out = GatherPoints()(x, octant_idx)
         return out
 
     def neighbor_index(self, pcs):
@@ -63,7 +63,7 @@ class PointConv(nn.Module):
         -------
         group_idx: index of points, [B, N, max_samples]
         """
-        return self.bpq(pcs)
+        return self.sbpq(pcs)
 
     def group_points(self, x, pcs):
         """For input point cloud features and coordinates, output the
@@ -84,15 +84,13 @@ class PointConv(nn.Module):
         group_pcs: [B, 3, N, max_samples]
             Grouped coordinates for each point.
         """
-        # TODO(leoyolo): gather is slow.
         # (B, N, max_samples)
         group_idx = self.neighbor_index(pcs)
-        # (B, 1, N x max_samples)
-        group_idx = group_idx.view(group_idx.size(0), -1).unsqueeze(1)
-        x_out = x.gather(2, group_idx.repeat(1, x.size(1), 1)).view(
+        group_idx = group_idx.view(group_idx.size(0), -1)
+        x_out = GatherPoints()(x, group_idx).view(
             x.size(0), x.size(1), x.size(2), self.max_samples
         )
-        pcs_out = pcs.gather(2, group_idx.repeat(1, 3, 1)).view(
+        pcs_out = GatherPoints()(pcs, group_idx).view(
             pcs.size(0), pcs.size(1), pcs.size(2), self.max_samples
         )
         pcs_out.sub_(pcs.unsqueeze(-1).expand_as(pcs_out))
