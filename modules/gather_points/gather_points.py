@@ -22,7 +22,7 @@ class GatherPointsFunction(torch.autograd.Function):
         features, indices = ctx.saved_tensors
         grad_feats = torch.zeros_like(features)
         if ctx.impl == 'naive':
-            gather_points_cuda.backward_atomicadd(grad_out, indices, grad_feats)
+            gather_points_cuda.backward(grad_out, indices, grad_feats)
         elif ctx.impl == 'reduction':
             gather_points_cuda.backward_reduction(grad_out, indices, grad_feats)
         elif ctx.impl == 'atomic':

@@ -88,7 +88,7 @@ class TestGatherPoints(unittest.TestCase):
         self.assertLess(feats.grad.sub(feats_torch.grad).abs().max().item(),
                         1e-6)
 
-    def test_gather_points_backward_reduction(self):
+    def test_gather_points_backward_atomicadd(self):
         feats = torch.randn(self.batch_size, self.feature_size,
                             self.num_points, requires_grad=True,
                             device=self.device)

@@ -2,6 +2,23 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 
+#define NUM_THREADS 1024
+
+// define atomicAdd for float and double if compute capabilities < 6.x
+#if !defined(__CUDA_ARCH__) || __CUDA_ARCH__ >= 600
+#else
+static inline __device__ double atomicAdd(double* address, double val) {
+    unsigned long long int *address_as_ull = (unsigned long long int*)address;
+    unsigned long long int old = *address_as_ull, assumed;
+    do {
+        assumed = old;
+        old = atomicCAS(address_as_ull, assumed,
+                __double_as_longlong(val + __longlong_as_double(assumed)));
+    } while (assumed != old);
+    return __longlong_as_double(old);
+}
+#endif
+
 template <typename scalar_t>
 __global__ void gather_points_cuda_forward_kernel(const int batch_size, const int feature_size, 
         const int num_points, const int index_size, const scalar_t* __restrict__ feats,
@@ -103,7 +120,7 @@ void gather_points_cuda_forward(at::Tensor feats, at::Tensor indices, at::Tensor
     const int feature_size = feats.size(1);
     const int num_points = feats.size(2);
     const int index_size = indices.size(1);
-    const int threads = 1024;
+    const int threads = NUM_THREADS;
     const int blocks = (batch_size*feature_size*index_size + threads - 1) / threads;
     AT_DISPATCH_FLOATING_TYPES(feats.type(), "gather_points_cuda_forward", ([&] {
                 gather_points_cuda_forward_kernel<<<blocks, threads>>>(batch_size, feature_size,
@@ -117,7 +134,7 @@ void gather_points_cuda_backward(at::Tensor grad_out, at::Tensor indices, at::Te
     const int feature_size = grad_out.size(1);
     const int num_points = grad_feats.size(2);
     const int index_size = indices.size(1);
-    const int threads = 1024;
+    const int threads = NUM_THREADS;
     const int blocks = (batch_size*feature_size*num_points + threads - 1) / threads;
     AT_DISPATCH_FLOATING_TYPES(grad_out.type(), "gather_points_cuda_backward", ([&] {
                 gather_points_cuda_backward_kernel<<<blocks, threads>>>(batch_size, feature_size,
@@ -131,8 +148,8 @@ void gather_points_cuda_backward_reduction(at::Tensor grad_out, at::Tensor indic
     const int feature_size = grad_out.size(1);
     const int num_points = grad_feats.size(2);
     const int index_size = indices.size(1);
-    const int threads = 1024;
-    const int blocks = 65536;
+    const int threads = NUM_THREADS;
+    const int blocks = 1024;
     const int smem_size = sizeof(float) * threads;
     AT_DISPATCH_FLOATING_TYPES(grad_out.type(), "gather_points_cuda_backward_reduction", ([&] {
                 gather_points_backward_reduction_kernel<<<blocks, threads, smem_size>>>(batch_size,
@@ -146,7 +163,7 @@ void gather_points_cuda_backward_atomicadd(at::Tensor grad_out, at::Tensor indic
     const int feature_size = grad_out.size(1);
     const int num_points = grad_feats.size(2);
     const int index_size = indices.size(1);
-    const int threads = 1024;
+    const int threads = NUM_THREADS;
     const int blocks = (batch_size*feature_size*index_size + threads - 1) / threads;
     AT_DISPATCH_FLOATING_TYPES(grad_out.type(), "gather_points_cuda_backward_atomicadd", ([&] {
                 gather_points_backward_atomicadd_kernel<<<blocks, threads>>>(batch_size, feature_size,
