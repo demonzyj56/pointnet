@@ -149,7 +149,7 @@ void gather_points_cuda_backward_reduction(at::Tensor grad_out, at::Tensor indic
     const int num_points = grad_feats.size(2);
     const int index_size = indices.size(1);
     const int threads = NUM_THREADS;
-    const int blocks = 1024;
+    const int blocks = batch_size * feature_size * num_points;
     const int smem_size = sizeof(float) * threads;
     AT_DISPATCH_FLOATING_TYPES(grad_out.type(), "gather_points_cuda_backward_reduction", ([&] {
                 gather_points_backward_reduction_kernel<<<blocks, threads, smem_size>>>(batch_size,

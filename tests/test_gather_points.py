@@ -1,18 +1,28 @@
 """Test gather points cuda module."""
 import unittest
+import numpy as np
 import torch
 from modules.gather_points import GatherPoints
+
 
 @unittest.skipUnless(torch.cuda.is_available(),
                      'GatherPoints is implemented only on GPU')
 class TestGatherPoints(unittest.TestCase):
 
     def setUp(self):
-        self.batch_size = 10
-        self.feature_size = 6
-        self.num_points = 64
-        self.index_size = 32
+        self.batch_size = 16
+        self.feature_size = 64
+        self.num_points = 1024
+        self.index_size = 65536
         self.device = torch.device('cuda')
+
+    def _assert_float_tensor_close(self, tensor, ref):
+        """Assert that two pytorch tensors are close."""
+        self.assertIs(tensor.dtype, ref.dtype)
+        nomin = tensor.sub(ref).norm().item()
+        denom = ref.norm().item()
+        # We don't check for float64 since float32 is enough.
+        self.assertLess(nomin/denom, np.finfo(np.float32).eps)
 
     def test_gather_points_size(self):
         feats = torch.randn(self.batch_size, self.feature_size,
@@ -37,7 +47,7 @@ class TestGatherPoints(unittest.TestCase):
             2,
             indices.unsqueeze(1).repeat(1, feats.size(1), 1)
         )
-        self.assertTrue(gathered.eq(gathered_torch).all().item())
+        self._assert_float_tensor_close(gathered, gathered_torch)
 
     def test_gather_points_backward_naive(self):
         # NOTE: you should not use cuda() over a variable (or a tensor with
@@ -62,8 +72,7 @@ class TestGatherPoints(unittest.TestCase):
         gathered.backward(grad_tensor)
         self.assertIsNotNone(feats_torch.grad)
         self.assertIsNotNone(feats.grad)
-        self.assertLess(feats.grad.sub(feats_torch.grad).abs().max().item(),
-                        1e-6)
+        self._assert_float_tensor_close(feats, feats_torch)
 
     def test_gather_points_backward_reduction(self):
         feats = torch.randn(self.batch_size, self.feature_size,
@@ -85,8 +94,7 @@ class TestGatherPoints(unittest.TestCase):
         gathered.backward(grad_tensor)
         self.assertIsNotNone(feats_torch.grad)
         self.assertIsNotNone(feats.grad)
-        self.assertLess(feats.grad.sub(feats_torch.grad).abs().max().item(),
-                        1e-6)
+        self._assert_float_tensor_close(feats, feats_torch)
 
     def test_gather_points_backward_atomicadd(self):
         feats = torch.randn(self.batch_size, self.feature_size,
@@ -108,8 +116,7 @@ class TestGatherPoints(unittest.TestCase):
         gathered.backward(grad_tensor)
         self.assertIsNotNone(feats_torch.grad)
         self.assertIsNotNone(feats.grad)
-        self.assertLess(feats.grad.sub(feats_torch.grad).abs().max().item(),
-                        1e-6)
+        self._assert_float_tensor_close(feats, feats_torch)
 
 
 if __name__ == "__main__":
