@@ -44,7 +44,9 @@ class GatherPoints(nn.Module):
         features: [B, C, N]
             Input features.
         indices: [B, M]
-            Input indices. For each batch the index ranges between 0...N-1.
+            Input indices. For each batch the index ranges between 0...N-1.  If
+            the indices are out of this range, then the corresponding feature
+            is set to zero.
 
         Returns
         -------

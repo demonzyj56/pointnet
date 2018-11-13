@@ -29,8 +29,11 @@ __global__ void gather_points_cuda_forward_kernel(const int batch_size, const in
         const int column = i / index_size;
         const int x = column / feature_size;
         const int index = indices[x*index_size+z];
-        const scalar_t val = feats[column*num_points+index];
-        out[i] = val;
+        if ((index >= 0) && (index < num_points)) {
+            out[i] = feats[column*num_points+index];
+        } else {
+            out[i] = 0.;
+        }
     }
 }
 
@@ -109,7 +112,9 @@ __global__ void gather_points_backward_atomicadd_kernel(const int batch_size, co
         int batch = columns / feature_size;
         int index = indices[batch*index_size+loc];
         scalar_t val = grad_out[i];
-        atomicAdd(&grad_feats[columns*num_points+index], val);
+        if ((index >= 0) && (index < num_points)) {
+            atomicAdd(&grad_feats[columns*num_points+index], val);
+        }
         __syncthreads();
     }
 }
