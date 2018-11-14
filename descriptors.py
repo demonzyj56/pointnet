@@ -13,12 +13,13 @@ logger = logging.getLogger(__name__)
 class PointConv(nn.Module):
 
     def __init__(self, in_channels, out_channels, radius, max_samples,
-                 bias=True):
+                 bias=True, padding='zero'):
         super(PointConv, self).__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.radius = radius
         self.max_samples = max_samples
+        self.padding = padding
         self.sbpq = SelfBallPointQuery(radius, max_samples)
         self.true_conv = nn.Conv2d(in_channels, out_channels,
                                    kernel_size=[1, 9], bias=bias)
@@ -43,8 +44,10 @@ class PointConv(nn.Module):
         octant_idx_all = OctantSample()(pcs)
         octant_idx = octant_idx_all[..., 0]
         # Octants with no points are set to have no features.
-        # The invalid index -1 is handled automatically by GatherPoints.
-        octant_idx[octant_idx.eq(0)] = -1
+        # The invalid index -1 is handled automatically by GatherPoints,
+        # where the corresponding features are set to zero.
+        if self.padding != 'zero':
+            octant_idx[octant_idx.eq(0)] = -1
         octant_idx = torch.cat([
             torch.zeros(octant_idx.size(0), 1, dtype=octant_idx.dtype,
                         device=octant_idx.device),
