@@ -42,6 +42,9 @@ class PointConv(nn.Module):
         # [batch_size, 8, max_samples]
         octant_idx_all = OctantSample()(pcs)
         octant_idx = octant_idx_all[..., 0]
+        # Octants with no points are set to have no features.
+        # The invalid index -1 is handled automatically by GatherPoints.
+        octant_idx[octant_idx.eq(0)] = -1
         octant_idx = torch.cat([
             torch.zeros(octant_idx.size(0), 1, dtype=octant_idx.dtype,
                         device=octant_idx.device),
