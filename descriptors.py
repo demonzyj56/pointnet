@@ -6,20 +6,51 @@ import torch.nn.functional as F
 from modules.self_ball_point_query import SelfBallPointQuery
 from modules.octant_sample import OctantSample
 from modules.gather_points import GatherPoints
+from modules.octant_query import OctantQuery
 
 logger = logging.getLogger(__name__)
+
+
+class PointConv2(nn.Module):
+    """Yet another impl using OctantQuery."""
+
+    def __init__(self, in_channels, out_channels, radius, bias=True):
+        super(PointConv2, self).__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.radius = radius
+        self.octant_query = OctantQuery(radius, 1)
+        self.true_conv = nn.Conv2d(in_channels, out_channels,
+                                   kernel_size=[1, 9], bias=bias)
+        self.reset_parameters()
+
+    def forward(self, x, pcs):
+        # [ batch_size, num_points, 9, ]
+        octant_idx = self.octant_query(pcs).squeeze(-1)
+        grouped_x = GatherPoints()(x, octant_idx.view(octant_idx.size(0), -1))
+        # [ batch_size, in_channels, num_points, 9 ]
+        grouped_x = grouped_x.view(
+            grouped_x.size(0), grouped_x.size(1), octant_idx.size(1), 9
+        )
+        out = self.true_conv(grouped_x).squeeze(-1)
+        return out
+
+    def reset_parameters(self):
+        """Parameter initialization."""
+        nn.init.xavier_uniform_(self.true_conv.weight)
+        if self.true_conv.bias is not None:
+            self.true_conv.bias.data.zero_()
 
 
 class PointConv(nn.Module):
 
     def __init__(self, in_channels, out_channels, radius, max_samples,
-                 bias=True, padding='zero'):
+                 bias=True):
         super(PointConv, self).__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.radius = radius
         self.max_samples = max_samples
-        self.padding = padding
         self.sbpq = SelfBallPointQuery(radius, max_samples)
         self.true_conv = nn.Conv2d(in_channels, out_channels,
                                    kernel_size=[1, 9], bias=bias)
@@ -43,11 +74,6 @@ class PointConv(nn.Module):
         # [batch_size, 8, max_samples]
         octant_idx_all = OctantSample()(pcs)
         octant_idx = octant_idx_all[..., 0]
-        # Octants with no points are set to have no features.
-        # The invalid index -1 is handled automatically by GatherPoints,
-        # where the corresponding features are set to zero.
-        if self.padding != 'zero':
-            octant_idx[octant_idx.eq(0)] = -1
         octant_idx = torch.cat([
             torch.zeros(octant_idx.size(0), 1, dtype=octant_idx.dtype,
                         device=octant_idx.device),
