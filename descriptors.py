@@ -1,12 +1,15 @@
 """Feature descriptors."""
 import logging
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from modules.self_ball_point_query import SelfBallPointQuery
 from modules.octant_sample import OctantSample
 from modules.gather_points import GatherPoints
-from modules.octant_query import OctantQuery, OctantQuery2
+from modules.octant_query import OctantQuery
+# TODO(leoyolo): implement OctantQuery2
+from modules.octant_query import OctantQuery2
 
 logger = logging.getLogger(__name__)
 
@@ -20,10 +23,12 @@ class AttnPointConv(nn.Module):
         self.mid_channels = mid_channels
         self.out_channels = out_channels
         self.mu = mu
+        self.radius = radius
+        self.ms = max_samples_per_octant
         self.octant_query = OctantQuery2(radius, max_samples_per_octant)
         self.depthwise_conv = nn.Conv2d(out_channels, out_channels,
                                         groups=out_channels,
-                                        kernel_size=[9, 1], bias=bias)
+                                        kernel_size=[1, 9], bias=bias)
         self.value_enc = nn.Conv1d(in_channels, out_channels, kernel_size=1,
                                    bias=False)
         self.query_enc = nn.Conv1d(in_channels, 8*mid_channels,
@@ -31,10 +36,60 @@ class AttnPointConv(nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self):
-        raise NotImplementedError
+        for m in (self.value_enc, self.query_enc, self.depthwise_conv):
+            nn.init.xavier_uniform_(m.weight)
+        if self.depthwise_conv.bias is not None:
+            self.depthwise_conv.bias.data.zero_()
 
     def forward(self, x, pcs):
-        raise NotImplementedError
+        # TODO(leoyolo): add a mask
+        batch_size = x.size(0)
+        num_points = x.size(-1)
+        # [batch_size, num_points, 8, max_samples]
+        octant_idx = self.octant_query(pcs)
+
+        # [batch_size, in_channels, (num_points x 8 x max_samples)]
+        gathered = GatherPoints()(x, octant_idx.view(octant_idx.size(0), -1))
+        # [(batch_size x num_points), (8 x in_channels), max_samples]
+        gx = gathered.view(batch_size, self.in_channels, num_points*8, self.ms).permute(0, 2, 1, 3)
+        gx = gx.view(batch_size*num_points, 8*self.in_channels, self.ms)
+        # [(batch_size x num_points), (8 x mid_channels), max_samples]
+        query = self.value_enc(gx)
+        # [(batch x num_points x 8), mid_channels, max_samples]
+        query = query.view(-1, self.mid_channels, self.ms)
+        # [(batch x num_points x 8), max_samples, max_samples]
+        qqt = query.permute(0, 2, 1).bmm(query).softmax(dim=-2)
+
+        if self.mu > 0:
+            # [batch_size, 3, num_points, (8 x max_samples)]
+            gp = GatherPoints()(pcs, octant_idx.view(octant_idx.size(0), -1))
+            gp = gp.view(batch_size, 3, num_points, 8*self.ms)
+            gp.sub_(pcs.unsqueeze(-1).repeat(1, 1, 1, 8*self.ms))
+            # [(batch_size x num_points x 8), 3, max_samples]
+            gp = gp.view(batch_size, 3, num_points*8, self.ms).permute(0, 2, 1, 3)
+            gp = gp.view(-1, 3, self.ms)
+            # [(batch_size x num_points x 8), max_samples, max_samples]
+            xxt = gp.permute(0, 2, 1).bmm(gp)
+            qqt.add_(xxt.mul(self.mu))
+
+        qqt.div_(math.sqrt(self.mid_channels))
+        # [batch_size, out_channels, (num_points x 8 x max_samples)]
+        values = self.value_enc(self.gathered)
+        # [(batch_size x num_points x 8), out_channels, max_samples]
+        values = values.view(batch_size, self.out_channels, num_points*8, self.ms).permute(0, 2, 1, 3)
+        values = values.view(-1, self.out_channels, self.ms)
+        # [(batch_size x num_points x 8), out_channels, max_samples]
+        octant_feats = values.bmm(qqt)
+        # [(batch_size x num_points x 8), out_channels]
+        octant_feats = F.max_pool1d(octant_feats, kernel_size=self.out_channels).squeeze(-1)
+        # [batch_size, out_channels, num_points, 8]
+        octant_feats = octant_feats.view(batch_size, num_points, 8, self.out_channels).permute(0, 3, 1, 2)
+        # [batch_size x out_channels x num_points, 1]
+        center_feats = self.value_enc(x).unsqueeze(-1)
+        feats = torch.cat([octant_feats, center_feats], dim=-1)
+        # [batch_size, out_channels, num_points]
+        feats = self.depthwise_conv(feats).squeeze(-1)
+        return feats
 
 
 class PointConv2(nn.Module):
