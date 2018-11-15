@@ -2,6 +2,16 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 
+// From Caffe.
+// CUDA: various checks for different function calls.
+#define CUDA_CHECK(condition) \
+  /* Code block avoids redefinition of cudaError_t error */ \
+  do { \
+    cudaError_t error = condition; \
+    AT_ASSERTM(error == cudaSuccess, cudaGetErrorString(error)); \
+  } while (0)
+#define CUDA_POST_KERNEL_CHECK CUDA_CHECK(cudaPeekAtLastError())
+
 template <typename scalar_t>
 __global__ void octant_query_cuda_forward_kernel(const int batch_size,
 		const int num_points, const float radius, const int max_samples,
@@ -16,14 +26,14 @@ __global__ void octant_query_cuda_forward_kernel(const int batch_size,
         const scalar_t x2 = pcs[(batch*3+1)*num_points+c];
         const scalar_t x3 = pcs[(batch*3+2)*num_points+c];
         int cur_idx = 0;
-        indices += (batch * 8 + octant) * max_samples;
+        indices += ((batch * num_points + c) * 9 + octant) * max_samples;
         for (int i = 0; i < num_points; ++i) {
             if (i == c)
                 continue;
             const scalar_t y1 = pcs[(batch*3+0)*num_points+i];
             const scalar_t y2 = pcs[(batch*3+1)*num_points+i];
             const scalar_t y3 = pcs[(batch*3+2)*num_points+i];
-            int o = 4 * int(y1 > 0) + 2 * int(y2 > 0) + int(y3 > 0);
+            int o = 4 * int(y1 > x1) + 2 * int(y2 > x2) + int(y3 > x3);
             if (o != octant)
                 continue;
             const scalar_t dist = (x1-y1)*(x1-y1) + (x2-y2)*(x2-y2) + (x3-y3)*(x3-y3);
@@ -37,6 +47,8 @@ __global__ void octant_query_cuda_forward_kernel(const int batch_size,
     }
 }
 
+// pcs: batch_size x 3 x num_points
+// indices: batch_size x num_points x 8 x max_samples
 void octant_query_cuda_forward(at::Tensor pcs, at::Tensor indices, float radius,
 		int max_samples_per_octant) {
 	const int batch_size = pcs.size(0);
@@ -50,4 +62,5 @@ void octant_query_cuda_forward(at::Tensor pcs, at::Tensor indices, float radius,
 			indices.data<int64_t>()
 		);
 	}));
+    CUDA_POST_KERNEL_CHECK;
 }
