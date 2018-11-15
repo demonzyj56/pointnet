@@ -2,7 +2,8 @@ import logging
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from descriptors import PointConv
+#  from descriptors import PointConv
+from descriptors import PointConv2 as PointConv
 
 logger = logging.getLogger(__name__)
 

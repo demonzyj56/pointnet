@@ -6,9 +6,35 @@ import torch.nn.functional as F
 from modules.self_ball_point_query import SelfBallPointQuery
 from modules.octant_sample import OctantSample
 from modules.gather_points import GatherPoints
-from modules.octant_query import OctantQuery
+from modules.octant_query import OctantQuery, OctantQuery2
 
 logger = logging.getLogger(__name__)
+
+
+class AttnPointConv(nn.Module):
+
+    def __init__(self, in_channels, mid_channels, out_channels, mu, radius,
+                 max_samples_per_octant, bias=True):
+        super(AttnPointConv, self).__init__()
+        self.in_channels = in_channels
+        self.mid_channels = mid_channels
+        self.out_channels = out_channels
+        self.mu = mu
+        self.octant_query = OctantQuery2(radius, max_samples_per_octant)
+        self.depthwise_conv = nn.Conv2d(out_channels, out_channels,
+                                        groups=out_channels,
+                                        kernel_size=[9, 1], bias=bias)
+        self.value_enc = nn.Conv1d(in_channels, out_channels, kernel_size=1,
+                                   bias=False)
+        self.query_enc = nn.Conv1d(in_channels, 8*mid_channels,
+                                   kernel_size=1, groups=8, bias=False)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        raise NotImplementedError
+
+    def forward(self, x, pcs):
+        raise NotImplementedError
 
 
 class PointConv2(nn.Module):
