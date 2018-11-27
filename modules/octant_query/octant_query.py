@@ -7,7 +7,7 @@ from . import octant_query_cuda
 class OctantQueryFunction(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx, pcs, radius, max_samples_per_octant, default_value=-1):
+    def forward(ctx, pcs, radius, max_samples_per_octant):
         indices = torch.arange(pcs.size(-1), dtype=torch.int64,
                                device=pcs.device)
         indices = indices.view(1, -1, 1, 1).repeat(

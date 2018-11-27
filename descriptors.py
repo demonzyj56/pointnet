@@ -8,8 +8,7 @@ from modules.self_ball_point_query import SelfBallPointQuery
 from modules.octant_sample import OctantSample
 from modules.gather_points import GatherPoints
 from modules.octant_query import OctantQuery
-# TODO(leoyolo): implement OctantQuery2
-from modules.octant_query import OctantQuery2
+from modules.octant_query_mask import OctantQueryMask
 
 logger = logging.getLogger(__name__)
 
@@ -25,13 +24,13 @@ class AttnPointConv(nn.Module):
         self.mu = mu
         self.radius = radius
         self.ms = max_samples_per_octant
-        self.octant_query = OctantQuery2(radius, max_samples_per_octant)
+        self.octant_query = OctantQueryMask(radius, max_samples_per_octant)
         self.depthwise_conv = nn.Conv2d(out_channels, out_channels,
                                         groups=out_channels,
-                                        kernel_size=[1, 9], bias=bias)
+                                        kernel_size=[1, 8], bias=bias)
         self.value_enc = nn.Conv1d(in_channels, out_channels, kernel_size=1,
                                    bias=False)
-        self.query_enc = nn.Conv1d(in_channels, 8*mid_channels,
+        self.query_enc = nn.Conv1d(8*in_channels, 8*mid_channels,
                                    kernel_size=1, groups=8, bias=False)
         self.reset_parameters()
 
@@ -42,54 +41,60 @@ class AttnPointConv(nn.Module):
             self.depthwise_conv.bias.data.zero_()
 
     def forward(self, x, pcs):
-        # TODO(leoyolo): add a mask
         batch_size = x.size(0)
         num_points = x.size(-1)
         # [batch_size, num_points, 8, max_samples]
-        octant_idx = self.octant_query(pcs)
+        octant_idx, octant_mask = self.octant_query(pcs)
+        octant_mask = octant_mask ^ 1
 
         # [batch_size, in_channels, (num_points x 8 x max_samples)]
         gathered = GatherPoints()(x, octant_idx.view(octant_idx.size(0), -1))
         # [(batch_size x num_points), (8 x in_channels), max_samples]
         gx = gathered.view(batch_size, self.in_channels, num_points*8, self.ms).permute(0, 2, 1, 3)
-        gx = gx.view(batch_size*num_points, 8*self.in_channels, self.ms)
+        gx = gx.contiguous().view(batch_size*num_points, 8*self.in_channels, self.ms)
         # [(batch_size x num_points), (8 x mid_channels), max_samples]
-        query = self.value_enc(gx)
+        query = self.query_enc(gx)
         # [(batch x num_points x 8), mid_channels, max_samples]
         query = query.view(-1, self.mid_channels, self.ms)
         # [(batch x num_points x 8), max_samples, max_samples]
-        qqt = query.permute(0, 2, 1).bmm(query).softmax(dim=-2)
+        qqt = query.transpose(1, 2).bmm(query)
 
         if self.mu > 0:
             # [batch_size, 3, num_points, (8 x max_samples)]
             gp = GatherPoints()(pcs, octant_idx.view(octant_idx.size(0), -1))
             gp = gp.view(batch_size, 3, num_points, 8*self.ms)
-            gp.sub_(pcs.unsqueeze(-1).repeat(1, 1, 1, 8*self.ms))
+            gp.sub_(pcs.unsqueeze(-1).expand_as(gp))
             # [(batch_size x num_points x 8), 3, max_samples]
             gp = gp.view(batch_size, 3, num_points*8, self.ms).permute(0, 2, 1, 3)
-            gp = gp.view(-1, 3, self.ms)
+            gp = gp.contiguous().view(-1, 3, self.ms)
             # [(batch_size x num_points x 8), max_samples, max_samples]
-            xxt = gp.permute(0, 2, 1).bmm(gp)
+            xxt = gp.transpose(1, 2).bmm(gp)
             qqt.add_(xxt.mul(self.mu))
 
+        # [(batch_size x num_points x 8), max_samples, max_samples], masked on
+        # second dimension.
         qqt.div_(math.sqrt(self.mid_channels))
+        qqt.masked_fill_(octant_mask.view(-1, self.ms, 1).expand_as(qqt), -math.inf)
+        qqt = qqt.softmax(dim=1)
+
         # [batch_size, out_channels, (num_points x 8 x max_samples)]
-        values = self.value_enc(self.gathered)
+        values = self.value_enc(gathered)
         # [(batch_size x num_points x 8), out_channels, max_samples]
         values = values.view(batch_size, self.out_channels, num_points*8, self.ms).permute(0, 2, 1, 3)
-        values = values.view(-1, self.out_channels, self.ms)
+        values = values.contiguous().view(-1, self.out_channels, self.ms)
         # [(batch_size x num_points x 8), out_channels, max_samples]
         octant_feats = values.bmm(qqt)
+        # [(batch_size x num_points x 8), out_channels, max_samples], masked on
+        # the last dimension.
+        octant_feats.masked_fill_(octant_mask.view(-1, 1, self.ms).expand_as(octant_feats), -math.inf)
+        # After max pooling all -inf entries will be removed.
         # [(batch_size x num_points x 8), out_channels]
-        octant_feats = F.max_pool1d(octant_feats, kernel_size=self.out_channels).squeeze(-1)
+        octant_feats = F.max_pool1d(octant_feats, self.ms).squeeze(-1)
         # [batch_size, out_channels, num_points, 8]
         octant_feats = octant_feats.view(batch_size, num_points, 8, self.out_channels).permute(0, 3, 1, 2)
-        # [batch_size x out_channels x num_points, 1]
-        center_feats = self.value_enc(x).unsqueeze(-1)
-        feats = torch.cat([octant_feats, center_feats], dim=-1)
         # [batch_size, out_channels, num_points]
-        feats = self.depthwise_conv(feats).squeeze(-1)
-        return feats
+        out = self.depthwise_conv(octant_feats).squeeze(-1)
+        return out
 
 
 class PointConv2(nn.Module):

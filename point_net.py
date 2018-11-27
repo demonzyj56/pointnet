@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 #  from descriptors import PointConv
 from descriptors import PointConv2 as PointConv
+from descriptors import AttnPointConv
 
 logger = logging.getLogger(__name__)
 
@@ -13,11 +14,16 @@ class PointNet(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(PointNet, self).__init__()
         self.convs = nn.ModuleList([
-            PointConv(in_channels, 64, 0.2, 32),
-            PointConv(64, 64, 0.2, 32),
-            PointConv(64, 64, 0.2, 32),
-            PointConv(64, 128, 0.4, 64),
-            PointConv(128, 1024, 0.4, 64),
+            #  PointConv(in_channels, 64, 0.2, 32),
+            #  PointConv(64, 64, 0.2, 32),
+            #  PointConv(64, 64, 0.2, 32),
+            #  PointConv(64, 128, 0.4, 64),
+            #  PointConv(128, 1024, 0.4, 64),
+            AttnPointConv(in_channels, 16, 64, 0, 0.2, 8),
+            AttnPointConv(64, 16, 64, 0, 0.2, 8),
+            AttnPointConv(64, 16, 64, 0, 0.2, 8),
+            AttnPointConv(64, 32, 128, 0, 0.2, 8),
+            AttnPointConv(128, 256, 1024, 0, 0.2, 8),
         ])
         self.bns = nn.ModuleList([
             nn.BatchNorm1d(m.out_channels) for m in self.convs
@@ -35,7 +41,7 @@ class PointNet(nn.Module):
     def forward(self, pt_coordinates, pt_features=None):
         if pt_features is None:
             pt_features = pt_coordinates
-        for conv, bn in zip(self.convs, self.bns):
+        for idx, (conv, bn) in enumerate(zip(self.convs, self.bns)):
             pt_features = F.relu(bn(conv(pt_features, pt_coordinates)))
         pt_features = F.adaptive_max_pool1d(pt_features, 1).squeeze(-1)
         pt_features = self.dp1(F.relu(self.bn1(self.fc1(pt_features))))
@@ -62,5 +68,7 @@ if __name__ == "__main__":
     try:
         import torchsummary
         torchsummary.summary(model, (3, 1024))
-    except:
+    except ImportError as e:
         pass
+    except Exception as e:
+        raise e
