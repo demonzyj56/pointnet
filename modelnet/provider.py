@@ -1,3 +1,4 @@
+import copy
 import logging
 import numpy as np
 import h5py
@@ -241,7 +242,7 @@ def load_h5(h5_filename):
     f = h5py.File(h5_filename)
     data = f['data'][:]
     label = f['label'][:]
-    return (data, label)
+    return (copy.deepcopy(data), copy.deepcopy(label))
 
 def loadDataFile(filename):
     return load_h5(filename)
