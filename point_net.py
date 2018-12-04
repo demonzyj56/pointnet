@@ -2,8 +2,8 @@ import logging
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-#  from descriptors import PointConv
-from descriptors import PointConv2 as PointConv
+from descriptors import PointConv
+from descriptors import PointConv2
 from descriptors import AttnPointConv
 
 logger = logging.getLogger(__name__)
@@ -14,16 +14,11 @@ class PointNet(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(PointNet, self).__init__()
         self.convs = nn.ModuleList([
-            #  PointConv(in_channels, 64, 0.2, 32),
-            #  PointConv(64, 64, 0.2, 32),
-            #  PointConv(64, 64, 0.2, 32),
-            #  PointConv(64, 128, 0.4, 64),
-            #  PointConv(128, 1024, 0.4, 64),
-            AttnPointConv(in_channels, 16, 64, 0, 0.2, 8),
-            AttnPointConv(64, 16, 64, 0, 0.2, 8),
-            AttnPointConv(64, 16, 64, 0, 0.2, 8),
-            AttnPointConv(64, 32, 128, 0, 0.2, 8),
-            AttnPointConv(128, 256, 1024, 0, 0.2, 8),
+            PointConv2(in_channels, 64, 0.2),
+            PointConv2(64, 64, 0.2),
+            PointConv2(64, 64, 0.2),
+            PointConv2(64, 128, 0.2),
+            PointConv2(128, 1024, 0.2),
         ])
         self.bns = nn.ModuleList([
             nn.BatchNorm1d(m.out_channels) for m in self.convs
@@ -57,8 +52,6 @@ class PointNet(nn.Module):
             elif isinstance(m, nn.BatchNorm1d):
                 m.weight.data.fill_(1.)
                 m.bias.data.zero_()
-            elif isinstance(m, PointConv):
-                m.reset_parameters()
 
 
 if __name__ == "__main__":
