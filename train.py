@@ -31,7 +31,7 @@ def parse_args():
 
 def train_model():
     """Main function for training classification model."""
-    dataset = ModelNetCls(cfg.DATA_PATH,
+    dataset = ModelNetCls(os.path.expanduser(cfg.DATA_PATH),
                           modelnet40=(cfg.DATASET=='modelnet40'),
                           train=True, transform=PCAugmentation(),
                           num_points=cfg.NUM_POINTS)
@@ -115,7 +115,8 @@ def eval_model(model):
     """Run test on model."""
     model.eval()
     device = next(model.parameters()).device
-    dataset = ModelNetCls(cfg.DATA_PATH, modelnet40=(cfg.DATASET=='modelnet40'),
+    dataset = ModelNetCls(os.path.expanduser(cfg.DATA_PATH),
+                          modelnet40=(cfg.DATASET=='modelnet40'),
                           train=False, transform=None,
                           num_points=cfg.NUM_POINTS)
     loader = torch.utils.data.DataLoader(
